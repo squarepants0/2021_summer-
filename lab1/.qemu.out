@@ -1,0 +1,49 @@
+(THU.CST) os is loading ...
+
+Special kernel symbols:
+  entry  0x00100000 (phys)
+  etext  0x00103489 (phys)
+  edata  0x0010ea16 (phys)
+  end    0x0010fd20 (phys)
+Kernel executable memory footprint: 64KB
+ebp:0x7b38 eip:0x100a37 args:0x10094 0x10094 0x7b68 0x100084
+    kern/debug/kdebug.c:306: print_stackframe+22
+ebp:0x7b48 eip:0x100084 args:0x10094 0x10094 0x7b68 0x100084
+    kern/init/init.c:49: grade_backtrace2+19
+ebp:0x7b68 eip:0x1000a6 args:0x10094 0x10094 0x7b68 0x100084
+    kern/init/init.c:54: grade_backtrace1+27
+ebp:0x7b88 eip:0x1000c3 args:0x10094 0x10094 0x7b68 0x100084
+    kern/init/init.c:59: grade_backtrace0+19
+ebp:0x7ba8 eip:0x1000e4 args:0x10094 0x10094 0x7b68 0x100084
+    kern/init/init.c:64: grade_backtrace+26
+ebp:0x7bc8 eip:0x100050 args:0x10094 0x10094 0x7b68 0x100084
+    kern/init/init.c:29: kern_init+79
+ebp:0x7be8 eip:0x7d6e args:0x10094 0x10094 0x7b68 0x100084
+    <unknow>: -- 0x00007d6d --
+ebp:0x7bf8 eip:0x7c4f args:0x10094 0x10094 0x7b68 0x100084
+    <unknow>: -- 0x00007c4e --
+++ setup timer interrupts
+0: @ring 0
+0:  cs = 8
+0:  ds = 10
+0:  es = 10
+0:  ss = 10
++++ switch to  user  mode +++
+1: @ring 3
+1:  cs = 1b
+1:  ds = 23
+1:  es = 23
+1:  ss = 23
++++ switch to kernel mode +++
+2: @ring 0
+2:  cs = 8
+2:  ds = 10
+2:  es = 10
+2:  ss = 10
+100 ticks
+End of Test.
+kernel panic at kern/trap/trap.c:18:
+    EOT: kernel seems ok.
+Welcome to the kernel debug monitor!!
+Type 'help' for a list of commands.
+K> 
