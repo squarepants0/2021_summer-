@@ -1,4 +1,8 @@
+
+
 [TOC]
+
+
 
 # ubuntu 全局代理
 
@@ -63,7 +67,7 @@ https.proxy=socks5://127.0.0.1:1080
 + 对比边界版本：方法适用于场商一开始没有设置加密方案，也就是旧固件未加密，随后固件升级中使用加密。
 
   + 我们可以在一些列版本中找到未加密和加密版本之间的边界版本，解包最后一个未加密的逆向升级程序即可
-  + ![image-20210726220433235](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210726220433235.png)
+  + ![image-20210726220433235](IOT.assets/image-20210726220433235.png)
   + 然后搜索包含诸如“firmware”、“upgrade”、“update”、“download”等关键字的组合定位升级程序位置
   + 当然存在调试手段也可以在升级时ps查看进程更新定位升级程序和参数：
     + `/usr/sbin/encimg -d -i <fw_path> -s <image_sign>`,然后使用IDA逆向encimg
@@ -74,7 +78,7 @@ https.proxy=socks5://127.0.0.1:1080
 
   + 直接加载升级程序，定位openssl调用很容易就得到解密命令：
 
-  + ![image-20210726220735496](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210726220735496.png)
+  + ![image-20210726220735496](IOT.assets\image-20210726220735496.png)
 
 + 漏洞获取密钥：如果找不到边界版本，又找不到调试接口或不熟悉硬件调试，可以考虑采用历史版本漏洞先获取设备控制权，在拿到升级程序逆向加密算法。这种方法比较取巧，需要设备存在RCE漏洞的历史固件，通过降级操作植入漏洞获取权限，**下载所需升级程序，然后逆向得到加密算法。**
 
@@ -1088,11 +1092,11 @@ IDA 不支持mipsel汇编转伪码，用ghidra查看伪码 IDA查看汇编
 
 将会用`char *getenv("HTTP_COOKIE")`获取用户的cookie值，在IDA中查看cgibin对"HTTP_COOKIE"的引用追溯到
 
-![image-20210724201705215](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210724201705215.png)
+![image-20210724201705215](IOT.assets\image-20210724201705215.png)
 
 逆向sess_get_uid函数，主要就是从cookie中分离得到uid：(个人觉得分析这样的子程序需要的参数是很重要的)
 
-![image-20210724210125082](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210724210125082.png)
+![image-20210724210125082](IOT.assets\image-20210724210125082.png)
 
 继续回溯发现，这个函数被许多其他函数调用，但在其中`hedwigcgi_main`函数中使用了sprintf危险函数，可造成缓冲区溢出。
 
@@ -1280,7 +1284,7 @@ bintils问题
 
 最后妥协使用大神的镜像 [AttifyOS](https://github.com/adi0x90/attifyos) 成功运行路由器：
 
-![image-20210724215015877](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210724215015877.png)
+![image-20210724215015877](IOT.assets\image-20210724215015877.png)
 
 要修改对应Image ID的run脚本 ：firmadyne/scratch/1/run.sh 见[Firmware Analysis Toolkit Demo - asciinema](https://asciinema.org/a/5VryIC2ec1j9SEIfGQ0qAWjoH)
 
@@ -1311,7 +1315,7 @@ Set 'tap1_0' nonpersistent
 
 成功后可以看到/etc下的初始化脚本跑起来：
 
-![image-20210724220044462](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210724220044462.png)
+![image-20210724220044462](IOT.assets\image-20210724220044462.png)
 
 亿一个问题：
 
@@ -1354,7 +1358,7 @@ Set 'tap1_0' nonpersistent
 
 然后我们来试试脚本吧！
 
-![image-20210724220805071](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210724220805071.png)
+![image-20210724220805071](IOT.assets\image-20210724220805071.png)
 
 PWNED！！！
 
@@ -1419,7 +1423,7 @@ CGI程序authentication.cgi中的参数存在溢出
           }
 ```
 
-<img src="C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210729151651474.png" alt="image-20210729151651474" style="zoom:50%;" />
+<img src="IOT.assets\image-20210729151651474.png" alt="image-20210729151651474" style="zoom:50%;" />
 
 这里让password 的长度刚好等于0x80那么在增加截断符时就会使buf_env第一个字符覆盖为\x00。使得FUN_0040aacc返回-1直接准备返回。
 
@@ -1616,11 +1620,11 @@ www/login.asp:453:<FORM id=frm name=login method=<% get_http_method(); %> action
 + 下载地址：https://www.zynamics.com/software.html
 + 使用：选择bindiff5，安装在IDA(7.x) PRO的目录下。在IDA 得到两个需要对比的文件的.idb文件后选择老的那个文件再用IDA打开，然后ctrl+6
 
-![image-20210803194401082](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210803194401082.png)
+![image-20210803194401082](IOT.assets\image-20210803194401082.png)
 
 越往下就代表这些函数改动的越大，这里选择guest_logout进行分析(提到未授权)。右键这个函数选择`view flow grahps`
 
-![image-20210803194602395](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210803194602395.png)
+![image-20210803194602395](IOT.assets\image-20210803194602395.png)
 
 + 绿色：相同的基本块
 + 黄色：修改的基本块
@@ -1629,7 +1633,7 @@ www/login.asp:453:<FORM id=frm name=login method=<% get_http_method(); %> action
 
 那我们需要重点看的是`红色`和`黄色`
 
-![image-20210803195518782](C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210803195518782.png)
+![image-20210803195518782](IOT.assets\image-20210803195518782.png)
 
 这里发现把一个危险函数`sscanf`给删了。用ghidra查看这里的伪码：
 
@@ -1701,7 +1705,7 @@ www/login.asp:453:<FORM id=frm name=login method=<% get_http_method(); %> action
 
 4、%\[^a\]  匹配非a的任意字符
 
-<img src="C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210803200520254.png" alt="image-20210803200520254" style="zoom:67%;" />
+<img src="IOT.assets\image-20210803200520254.png" alt="image-20210803200520254" style="zoom:67%;" />
 
 所以这里submit_button构造为：`abcd;xxx=12345`将abcd赋值给`acStack108`12345这部分赋值给acStack172。显然这里存在溢出
 
@@ -2563,7 +2567,7 @@ fh.close()
 
 路径可视化如下：
 
-<img src="C:\Users\23347\AppData\Roaming\Typora\typora-user-images\image-20210726153013163.png" alt="image-20210726153013163" style="zoom:67%;" />
+<img src="IOT.assets\image-20210726153013163.png" alt="image-20210726153013163" style="zoom:67%;" />
 
 我们先定义好所有的请求，然后安先后顺序建立连接，在fuzz时从根走到底依次fuzz对应请求。这里先fuzz `helo`，完成使用前一步fuzz的可行数据后往下fuzz `mail from`，完成后用前面的可行数据`helo`和`mail from`继续进行`rcpt to`的fuzz，完成后进行`data` fuzz。然后从`ehlo`路径出发进行fuzz
 
