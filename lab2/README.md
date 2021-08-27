@@ -283,7 +283,7 @@ e820map:
     ((void (*)(void))(ELFHDR->e_entry & 0xFFFFFF))();
 ```
 
-注意那个`& 0xFFFFFF`所以本来要读到**0xC0100000**的但是实际上还是读到了**0x100000**这时候出现了信息不对等(ELFHeader给出的和实际加载的)所以将在后面引入一个新的gdt表并将base设置为**-0xC0000000**来解决虚拟地址问题
+注意那个`& 0xFFFFFF`所以本来要读到**0xC0100000**的但是实际上还是读到了**0x100000**这时候出现了信息不对等(ELFHeader给出的和实际加载的)所以将在后面引入一个简单的页表来解决(或设置gdt表并将base设置为**-0xC0000000**来解决虚拟地址问题)
 
 >   其实CPU读到的可以总是看做虚拟地址，因为对其的解析是由其他硬件(MMU)配合gdt等数据结构来完成的，只要解析方式或数据结构发生该表最终索引的物理地址也就变了，**CPU一直被蒙在鼓里**
 
@@ -293,18 +293,9 @@ e820map:
 
 ### entry.s
 
-GDT：VA映射到PA需要**-0xC0000000**，正好对应ld将整个内核虚拟地址设为0xC0100000
+GDT：直接映射，kernel虚拟地址起始为**0xc0000000**，引用页表来解决映射问题
 
-```assembly
-__gdt:
-    SEG_NULL
-    SEG_ASM(STA_X | STA_R, - KERNBASE, 0xFFFFFFFF)      # code segment
-    SEG_ASM(STA_W, - KERNBASE, 0xFFFFFFFF)              # data segment
-```
-
-对应上文，base为- KERNBASE 即 -0xC0000000
-
-**并且此处虚拟地址已经是0xC0100000开头了**
+**并且此处虚拟地址已经是0xC0100000开头了**(像是标号，字符串地址这样的)，其ip地址是从0x10000开始的，因为这里是实际text段开头
 
 ---
 
@@ -317,20 +308,30 @@ __gdt:
 #include <memlayout.h>
 
 #define REALLOC(x) (x - KERNBASE)
+
 .text
 .globl kern_entry
 kern_entry:
-    # reload temperate gdt (second time) to remap all physical memory
-    # virtual_addr 0~4G=linear_addr&physical_addr -KERNBASE~4G-KERNBASE 
-    lgdt REALLOC(__gdtdesc)
-    movl $KERNEL_DS, %eax
-    movw %ax, %ds
-    movw %ax, %es
-    movw %ax, %ss
+    # load pa of boot pgdir
+    movl $REALLOC(__boot_pgdir), %eax
+    movl %eax, %cr3
 
-    ljmp $KERNEL_CS, $relocated
+    # enable paging
+    movl %cr0, %eax
+    orl $(CR0_PE | CR0_PG | CR0_AM | CR0_WP | CR0_NE | CR0_TS | CR0_EM | CR0_MP), %eax
+    andl $~(CR0_TS | CR0_EM), %eax
+    movl %eax, %cr0
 
-relocated:
+    # update eip
+    # now, eip = 0x1.....
+    leal next, %eax
+    # set eip = KERNBASE + 0x1.....
+    jmp *%eax
+next:
+
+    # unmap va 0 ~ 4M, it's temporary mapping
+    xorl %eax, %eax
+    movl %eax, __boot_pgdir
 
     # set ebp, esp
     movl $0x0, %ebp
@@ -352,41 +353,65 @@ bootstack:
     .globl bootstacktop
 bootstacktop:
 
-.align 4
-__gdt:
-    SEG_NULL
-    SEG_ASM(STA_X | STA_R, - KERNBASE, 0xFFFFFFFF)      # code segment
-    SEG_ASM(STA_W, - KERNBASE, 0xFFFFFFFF)              # data segment
-__gdtdesc:
-    .word 0x17                                          # sizeof(__gdt) - 1
-    .long REALLOC(__gdt)
+# kernel builtin pgdir
+# an initial page directory (Page Directory Table, PDT)
+# These page directory table and page table can be reused!
+.section .data.pgdir
+.align PGSIZE
+__boot_pgdir:
+.globl __boot_pgdir
+    # map va 0 ~ 4M to pa 0 ~ 4M (temporary)??why for running code after PG MOD
+    .long REALLOC(__boot_pt1) + (PTE_P | PTE_U | PTE_W)
+    .space (KERNBASE >> PGSHIFT >> 10 << 2) - (. - __boot_pgdir) # pad to PDE of KERNBASE
+    # map va KERNBASE + (0 ~ 4M) to pa 0 ~ 4M
+    .long REALLOC(__boot_pt1) + (PTE_P | PTE_U | PTE_W)
+    .space PGSIZE - (. - __boot_pgdir) # pad to PGSIZE
+
+.set i, 0
+__boot_pt1:
+.rept 1024
+    .long i * PGSIZE + (PTE_P | PTE_W)
+    .set i, i + 1
+.endr
 ```
 
 重点：
 
-+   建立了新的GDT表，待会解决虚拟地址映射问题
-+   建立了8K页对齐的内核栈：bootstacktop
-+   然后重新加载GDT，ljmp切换cs进行重定位(采用新的地址解析)
-+   使用内核栈，进入kern_init
++   建立简单的页目录页对应的页表项。将Va：0~4M和Va：KernelBase ~ KernelBase + 4M映射到Pa：0~4M
++   设置专门的内核栈`bootstacktop`
+
+由于此时段机制是直接映射逻辑地址== Base + offset == lineable address 也就是逻辑地址等于线性地址进而后续页映射。这里需要注意的是boot_pgdir中第一项用于**临时映射**，这是因为在开启页机制(`movl %eax, %cr0`)的下一条指令就会采用页映射，也就是`leal next, %eax`这里next标号的值起始地址为**0xc0000000**，根据**.long REALLOC(__boot_pt1) + (PTE_P | PTE_U | PTE_W)**正常寻址。但是其指令本身地址是0x10000开始的:
+
+```assembly
+=> 0x100000:	mov    eax,0x121000
+   0x100005:	mov    cr3,eax
+   0x100008:	mov    eax,cr0
+   0x10000b:	or     eax,0x8005002f
+   0x100010:	and    eax,0xfffffff3
+   0x100013:	mov    cr0,eax
+   0x100016:	lea    eax,ds:0xc010001e
+   0x10001c:	jmp    eax
+   0x10001e:	xor    eax,eax
+   0x100020:	mov    ds:0xc0121000,eax
+   0x100025:	mov    ebp,0x0
+   0x10002a:	mov    esp,0xc0120000
+   0x10002f:	call   0x100036
+   0x100034:	jmp    0x100034
+   0x100036:	push   ebp
+   0x100037:	mov    ebp,esp
+   0x100039:	sub    esp,0x28
+   0x10003c:	mov    edx,0xc0124104
+```
+
+因此需要对应的映射来解决，如果没有上面第一条页目录项，那么0x10000无法正常寻址
 
 
 
 ### kern_init&pmm_init
 
-GDT：VA映射到PA需要**-0xC0000000**，正好对应ld将整个内核虚拟地址设为0xC0100000
+GDT：直接映射，kernel虚拟地址起始为**0xc0000000**，引用页表来解决映射问题
 
-```assembly
-__gdt:
-    SEG_NULL
-    SEG_ASM(STA_X | STA_R, - KERNBASE, 0xFFFFFFFF)      # code segment
-    SEG_ASM(STA_W, - KERNBASE, 0xFFFFFFFF)              # data segment
-```
-
-对应上文，base为- KERNBASE 即 -0xC0000000
-
-**并且此处虚拟地址已经是0xC0100000开头了**
-
-以下由于虚拟地址能够正确对应物理地址，将主要提及虚拟地址
+页表：页目录其仅有一项指向初始页表完成KernelBase ~ kernelBase+4M的映射
 
 ---
 
@@ -409,17 +434,25 @@ kern_init(void) {
 对于pmm_init：
 
 ```c
-    //初始化一个双链表头，将用于管理free页
-	init_pmm_manager();
-    //建立物理页表
-    page_init();
-    check_alloc_page();
-
-    // create boot_pgdir, an initial page directory(Page Directory Table, PDT)
-    //创建页目录
-    boot_pgdir = boot_alloc_page();
-    memset(boot_pgdir, 0, PGSIZE);
+void
+pmm_init(void) {
+    // We've already enabled paging
     boot_cr3 = PADDR(boot_pgdir);
+
+    //We need to alloc/free the physical memory (granularity is 4KB or other size). 
+    //So a framework of physical memory manager (struct pmm_manager)is defined in pmm.h
+    //First we should init a physical memory manager(pmm) based on the framework.
+    //Then pmm can alloc/free the physical memory. 
+    //Now the first_fit/best_fit/worst_fit/buddy_system pmm are available.
+    init_pmm_manager();
+
+    // detect physical memory space, reserve already used memory,
+    // then use pmm->init_memmap to create free page list、
+    //建立页目录页表
+    page_init();
+
+    //use pmm->check to verify the correctness of the alloc/free function in a pmm
+    check_alloc_page();
 
     check_pgdir();
 
@@ -427,33 +460,27 @@ kern_init(void) {
 
     // recursively insert boot_pgdir in itself
     // to form a virtual page table at virtual address VPT
-    //页目录插入虚拟页表
+    //建立虚表
     boot_pgdir[PDX(VPT)] = PADDR(boot_pgdir) | PTE_P | PTE_W;
 
     // map all physical memory to linear memory with base linear addr KERNBASE
-    //linear_addr KERNBASE~KERNBASE+KMEMSIZE = phy_addr 0~KMEMSIZE 物理地址0~0x38000000映射到线性地址0xC0000000~0xC0000000+0x38000000
-    //But shouldn't use this map until enable_paging() & gdt_init() finished.
+    // linear_addr KERNBASE ~ KERNBASE + KMEMSIZE = phy_addr 0 ~ KMEMSIZE
+    //建立虚表
     boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
 
-    //temporary map: 
-    //virtual_addr 3G~3G+4M = linear_addr 0~4M = linear_addr 3G~3G+4M = phy_addr 0~4M     
-    boot_pgdir[0] = boot_pgdir[PDX(KERNBASE)];
-
-    enable_paging();
-
-    //reload gdt(third time,the last time) to map all physical memory
-    //virtual_addr 0~4G=liear_addr 0~4G
-    //then set kernel stack(ss:esp) in TSS, setup TSS in gdt, load TSS
+    // Since we are using bootloader's GDT,
+    // we should reload gdt (second time, the last time) to get user segments and the TSS
+    // map virtual_addr 0 ~ 4G = linear_addr 0 ~ 4G
+    // then set kernel stack (ss:esp) in TSS, setup TSS in gdt, load TSS
     gdt_init();
-
-    //disable the map of virtual_addr 0~4M
-    boot_pgdir[0] = 0;
 
     //now the basic virtual memory map(see memalyout.h) is established.
     //check the correctness of the basic virtual memory map.
     check_boot_pgdir();
 
     print_pgdir();
+
+}
 ```
 
 
@@ -620,9 +647,175 @@ page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm) {
 
 
 
-### Todo
+### 自映射
 
-+   页表自映射建立
+GDT：直接映射，kernel虚拟地址起始为**0xc0000000**，引用页表来解决映射问题
+
+页表：页目录其仅有一项指向初始页表完成KernelBase ~ kernelBase+4M的映射
+
+----
+
+上面完成page_init函数后，主要是用**struct Page***管理空闲物理页空间会占掉一部分内存，以及完善页表项~页表~物理页对应函数。并没有进一步映射。
+
+```bash
+gdb-peda$ telescope 0xc0121000		#页目录基址
+0000| 0xc0121000 --> 0x0 
+0004| 0xc0121004 --> 0x0 
+0008| 0xc0121008 --> 0x0 
+0012| 0xc012100c --> 0x0 
+0016| 0xc0121010 --> 0x0 
+0020| 0xc0121014 --> 0x0 
+0024| 0xc0121018 --> 0x0 
+0028| 0xc012101c --> 0x0 
+gdb-peda$ telescope 0xc0121c00		#kernelBase虚拟地址对应的页目录项，只有这一个
+0000| 0xc0121c00 --> 0x122027       #PA
+0004| 0xc0121c04 --> 0x0 
+0008| 0xc0121c08 --> 0x0 
+0012| 0xc0121c0c --> 0x0 
+0016| 0xc0121c10 --> 0x0 
+0020| 0xc0121c14 --> 0x0 
+0024| 0xc0121c18 --> 0x0 
+0028| 0xc0121c1c --> 0x0 
+```
+
+
+
+用这两条语句完成进一步映射：
+
+```c
+    boot_pgdir[PDX(VPT)] = PADDR(boot_pgdir) | PTE_P | PTE_W;
+
+    // map all physical memory to linear memory with base linear addr KERNBASE
+    // linear_addr KERNBASE ~ KERNBASE + KMEMSIZE = phy_addr 0 ~ KMEMSIZE
+    boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
+```
+
++   第一条：VPT == 0xFAC00000 虚拟页起始位置，也就是说这个虚拟地址会映射到页目录基址(boot_pgdir， **Va：0xc0121000**)，
+
+    +   结果为：
+
+        +   ```bas
+            gdb-peda$ x/18wx 0xc0121000+0x3eb*4
+            0xc0121fac:	0x00121003		#页目录基址
+            ```
+
+        +   那么0xFAC00000寻址时就会找到页目录基址项也就是0
+
++   还有一个是PDT == 0xfafeb000：**pde_t * const vpd = (pde_t *)PGADDR(PDX(VPT), PDX(VPT), 0);**
+
+    +   在VPT对应页目录基址上增加了偏移(页表偏移)：0x00121000(PA)为基址偏移0x3eb*4其实还是页目录基址，但此时偏移就派上用处了
+
++   boot_map_segment：
+
+    +   ```c
+        static void
+        boot_map_segment(pde_t *pgdir, uintptr_t la, size_t size, uintptr_t pa, uint32_t perm) {
+            assert(PGOFF(la) == PGOFF(pa));
+            size_t n = ROUNDUP(size + PGOFF(la), PGSIZE) / PGSIZE;
+            la = ROUNDDOWN(la, PGSIZE);
+            pa = ROUNDDOWN(pa, PGSIZE);
+            for (; n > 0; n --, la += PGSIZE, pa += PGSIZE) {
+                /*重点*/
+                pte_t *ptep = get_pte(pgdir, la, 1);
+                assert(ptep != NULL);
+                *ptep = pa | PTE_P | perm;
+            }
+        }
+        ```
+
+    +   循环中的两条语句建立了线性地址(逻辑地址，虚拟地址)到物理地址的**连续映射**：Va(**0xc0000000~0xf8000000**) 到 Pa(**0x0~0x38000000**)，每个页目录项映射4M的空间1024个项理应4G空间，但是ucore并没有使用这么大的内存只有0x38000000，896M。其中0~4M在entry.s完成映射(此处不连续，见下文)
+
+        +   小问题：在e820map中可用空间没这么大
+
+        +   ```bash
+            e820map:
+              memory: 0009fc00, [00000000, 0009fbff], type = 1.
+              memory: 00000400, [0009fc00, 0009ffff], type = 2.
+              memory: 00010000, [000f0000, 000fffff], type = 2.
+              memory: 07ee0000, [00100000, 07fdffff], type = 1.
+              memory: 00020000, [07fe0000, 07ffffff], type = 2.
+              memory: 00040000, [fffc0000, ffffffff], type = 2.
+            
+            ```
+
+        +   我觉得下一个lab续虚拟内存管理能解释
+
+
+
+建立完映射后，看看页表:
+
+```bash
+gdb-peda$ x/18wx 0xc0121c00
+0xc0121c00:	0x00122027	0x00225007	0x00226007	0x00227007
+0xc0121c10:	0x00228007	0x00229007	0x0022a007	0x0022b007
+0xc0121c20:	0x0022c007	0x0022d007	0x0022e007	0x0022f007
+0xc0121c30:	0x00230007	0x00231007	0x00232007	0x00233007
+0xc0121c40:	0x00234007	0x00235007
+
+gdb-peda$ x/18wx 0xc0121c00 + 223*4   #0x38000000对应224个PDE
+0xc0121f7c:	0x00303007	0x00000000	0x00000000	0x00000000
+0xc0121f8c:	0x00000000	0x00000000	0x00000000	0x00000000
+0xc0121f9c:	0x00000000	0x00000000	0x00000000	0x00000000
+0xc0121fac:	0x00121003
+
+gdb-peda$ telescope 0xc0225000			#不能在gdb直接用0x225000，因为也会通过页机制
+0000| 0xc0225000 --> 0x400003 
+0004| 0xc0225004 --> 0x401003 
+0008| 0xc0225008 --> 0x402003 
+0012| 0xc022500c --> 0x403003 
+0016| 0xc0225010 --> 0x404003 
+0020| 0xc0225014 --> 0x405003 
+0024| 0xc0225018 --> 0x406003 
+0028| 0xc022501c --> 0x407003 
+```
+
+可以看到第一个PDE是没变的，后面页表基址突增到0x225000是由于前面提到的struct Page结构体所占了一部分空间。也就是说除了0~4M这部分空间后面4M~0x38000000Pa物理地址和虚拟地址都是连续的
+
+此时VDP相当以PDT基址为一块页帧，通过最后offset可以找到**所有的PDE和PTE**，**这是我理解的自映射**：
+
+```bash
+gdb-peda$ x/18wx 0xfafeb000 + 0xc00
+0xfafebc00:	0x00122027	0x00225007	0x00226007	0x00227007
+0xfafebc10:	0x00228007	0x00229007	0x0022a007	0x0022b007
+0xfafebc20:	0x0022c007	0x0022d007	0x0022e007	0x0022f007
+0xfafebc30:	0x00230007	0x00231007	0x00232007	0x00233007
+0xfafebc40:	0x00234007	0x00235007
+```
+
+这里也就是虚拟页表，最后：sizeof(struct Page) == 0x20 lab3及以后
+
+<img src="README.assets/image-20210827202618544.png" alt="image-20210827202618544" style="zoom:67%;" />
+
+虚拟地址空间：
+
+```bash
+/* *
+ * Virtual memory map:                                          Permissions
+ *                                                              kernel/user
+ *
+ *     4G -----------> +---------------------------------+
+ *                     |                                 |
+ *                     |         Empty Memory (*)        |
+ *                     |                                 |
+ *                     +---------------------------------+ 0xFB000000
+ *                     |   Cur. Page Table (Kern, RW)    | RW/-- PTSIZE
+ *     VPT ----------> +---------------------------------+ 0xFAC00000
+ *                     |        Invalid Memory (*)       | --/--
+ *     KERNTOP ------> +---------------------------------+ 0xF8000000
+ *                     |                                 |
+ *                     |    Remapped Physical Memory     | RW/-- KMEMSIZE
+ *                     |                                 |
+ *     KERNBASE -----> +---------------------------------+ 0xC0000000
+ *                     |                                 |
+ *                     |                                 |
+ *                     |                                 |
+ *                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * (*) Note: The kernel ensures that "Invalid Memory" is *never* mapped.
+ *     "Empty Memory" is normally unmapped, but user programs may map pages
+ *     there if desired.
+ *
+ * */
+```
 
 
 
