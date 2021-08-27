@@ -40,7 +40,7 @@
 	  #-m <emulation>:	模拟指定的链接器
 	  #-nostdlib: 禁止链接标准库
 	  #-T: 指定链接脚本
-	  ```
+	```
 	+   ```ld
 	    /* Simple linker script for the JOS kernel.
 	       See the GNU ld 'info' manual ("info ld") to learn the syntax. */
@@ -725,21 +725,35 @@ read_eip(void) {
     return eip;
 }//读取caller的返回地址，获取近似调用点
 /*获取前4个call参数*/
-asm volatile("movl 8(%%ebp), %0":"=r"(args[0]));
-asm volatile("movl 12(%%ebp), %0":"=r"(args[1]));
-asm volatile("movl 16(%%ebp), %0":"=r"(args[2]));
-asm volatile("movl 20(%%ebp), %0":"=r"(args[3]));
-/*更新ebp和eip*/
-asm volatile(
-            "movl (%1), %0;"
-            :"=a"(ebp)
-            :"b"(ebp)
-        );
-asm volatile(
+void
+print_stackframe(void) {	
+	uintptr_t ebp = read_ebp();
+    uintptr_t eip = read_eip();
+    uint32_t args[4] = {0};
+    while(ebp != 0){
+        asm volatile("movl 8(%1), %0":"=r"(args[0]):"b"(ebp));
+        asm volatile("movl 12(%1), %0":"=r"(args[1]):"b"(ebp));
+        asm volatile("movl 16(%1), %0":"=r"(args[2]):"b"(ebp));
+        asm volatile("movl 20(%1), %0":"=r"(args[3]):"b"(ebp));
+        cprintf("ebp:0x%x eip:0x%x ", ebp, eip);
+        cprintf("args:0x%x 0x%x ", args[0], args[1]);
+        cprintf("0x%x 0x%x\n", args[2], args[3]);
+        print_debuginfo(eip-1);
+
+        // asm volatile("movl 4(%0), %1"::"a"(ebp), "b"(eip));
+        asm volatile(
             "movl 4(%1), %0;"
             :"=a"(eip)
             :"b"(ebp)
         );
+        // asm volatile("movl (%0), %1"::"=r"(ebp), "b"(ebp));
+        asm volatile(
+            "movl (%1), %0;"
+            :"=a"(ebp)
+            :"b"(ebp)
+        );
+    }
+}
 ````
 
 
