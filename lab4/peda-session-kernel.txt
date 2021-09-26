@@ -1,0 +1,7 @@
+break kern_init
+break *proc_init
+break /home/matrix/ucore/os_kernel_lab-master/lab4/lab4/kern/process/proc.c:378
+break /home/matrix/ucore/os_kernel_lab-master/lab4/lab4/kern/process/proc.c:384
+break *forkret
+break *0xc0108867
+
